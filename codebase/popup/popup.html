@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Bulk Image Generator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Gemini Image Generator</h1>
+      <p class="subtitle">Batch generate &amp; download — one per line</p>
+    </header>
+
+    <section id="input-section">
+      <label for="prompts">Prompts <span class="hint">(one per line)</span></label>
+      <textarea
+        id="prompts"
+        placeholder="a cat wearing sunglasses on a beach&#10;a futuristic city at sunset&#10;watercolor painting of a mountain lake"
+        spellcheck="false"
+      ></textarea>
+
+      <details class="options">
+        <summary>Options</summary>
+        <div class="option-row">
+          <label for="delay">Delay between prompts (seconds)</label>
+          <input type="number" id="delay" value="4" min="1" max="60">
+        </div>
+        <div class="option-row">
+          <label for="prefix">
+            <input type="checkbox" id="prefix" checked>
+            Add "Generate an image of:" prefix
+          </label>
+        </div>
+      </details>
+
+      <button id="start-btn" class="primary-btn">Generate &amp; Download</button>
+    </section>
+
+    <section id="progress-section" class="hidden">
+      <div class="progress-header">
+        <span id="progress-text">Starting…</span>
+        <button id="reset-btn" class="text-btn">Start Over</button>
+      </div>
+      <div class="progress-bar-wrap">
+        <div id="progress-bar"></div>
+      </div>
+      <div id="log"></div>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
