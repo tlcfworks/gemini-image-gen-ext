@@ -43,34 +43,17 @@ async function runGeneration(prompts, options) {
         continue;
       }
 
-      const images = result.images || [];
-      if (images.length === 0) {
+      // Content script clicks Gemini's own "Download full-sized image" button,
+      // which is the only way to get the full-resolution file (the blob shown in
+      // the chat is a downscaled preview). Downloads go to the browser's default folder.
+      const downloadCount = result.downloadCount ?? 0;
+      if (downloadCount === 0) {
         broadcast({ status: 'noImages' });
         continue;
       }
 
-      broadcast({ status: 'downloading', imageCount: images.length });
-
-      for (let j = 0; j < images.length; j++) {
-        if (cancelled) break;
-        const url = images[j];
-        const slug = slugify(prompt).slice(0, 40);
-        const filename = `gemini-images/${slug}-${i + 1}-${j + 1}.png`;
-
-        // Gemini images are blob:https://gemini.google.com/... URLs.
-        // Blob URLs are renderer-local; the background cannot download them directly.
-        // Delegate to the content script which shares the renderer with the page.
-        const dlResult = await callContentScript(
-          tabId,
-          { action: 'downloadImage', url, filename },
-          30_000,
-        );
-        if (dlResult?.ok) {
-          broadcast({ status: 'downloaded', filename });
-        } else {
-          broadcast({ status: 'error', error: `Download failed: ${dlResult?.error || 'unknown'}` });
-        }
-      }
+      broadcast({ status: 'downloaded', count: downloadCount,
+        filename: `${downloadCount} image(s) via Gemini download` });
     } catch (err) {
       broadcast({ status: 'error', error: err.message });
     }

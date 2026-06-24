@@ -122,11 +122,11 @@ async function processPrompt(prompt) {
   log('Waiting for image generation to complete…');
   await waitForComplete(beforeCount, 300_000); // 5-minute hard cap
 
-  log('Extracting image URLs…');
-  const images = await extractImages(300_000);
-  log(`Found ${images.length} image(s)`);
+  log('Clicking "Download full-sized image" button(s)…');
+  const downloadCount = await clickGeminiDownloadButtons();
+  log(`Triggered ${downloadCount} full-size download(s)`);
 
-  return { images };
+  return { downloadCount };
 }
 
 async function clickSubmit(inputField) {
@@ -169,41 +169,34 @@ async function waitForComplete(beforeCount, timeoutMs) {
   }
 }
 
-// Wait for images with the "loaded" class (Gemini adds it when blob is ready)
-async function extractImages(timeoutMs = 60_000) {
+// Click Gemini's built-in "Download full-sized image" button for every generated image.
+// This is the only reliable way to get the full-resolution file — the blob shown in
+// the chat is a downscaled preview; the download button fetches the real full-size blob.
+async function clickGeminiDownloadButtons(timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
+
+  // Wait until at least one download button appears
   while (Date.now() < deadline) {
-    const imgs = findAll(SEL.generatedImage);
-    if (imgs.length > 0) return imgs.map(img => img.src).filter(Boolean);
+    const btns = document.querySelectorAll('button[aria-label="Download full-sized image"]');
+    if (btns.length > 0) {
+      for (const btn of btns) {
+        // Hover over the parent generated-image to ensure the controls overlay is visible
+        const genImg = btn.closest('generated-image');
+        if (genImg) {
+          genImg.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+          genImg.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        }
+        await sleep(200);
+        btn.click();
+        log('Clicked "Download full-sized image"');
+        await sleep(600); // give browser time to register each download
+      }
+      return btns.length;
+    }
     await sleep(500);
   }
-  log('No images found within timeout');
-  return [];
-}
-
-// ─── IMAGE DOWNLOAD ───────────────────────────────────────────────────────────
-// Gemini images are served as blob:https://gemini.google.com/... URLs.
-// Content scripts share the renderer with the page, so we can fetch them directly.
-async function downloadImageInPage(blobUrl, filename) {
-  try {
-    const resp = await fetch(blobUrl); // works because we're in the gemini.google.com origin
-    if (!resp.ok) throw new Error(`fetch ${resp.status}`);
-    const blob = await resp.blob();
-    const localUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = localUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(localUrl); }, 500);
-    return { ok: true };
-  } catch (err) {
-    log(`Blob download failed (${err.message}), trying Gemini's own download button`);
-    // Fallback: click Gemini's own "Download full-sized image" button
-    const dlBtn = find(SEL.geminiDownloadBtn);
-    if (dlBtn) { dlBtn.click(); return { ok: true, usedGeminiBtn: true }; }
-    return { ok: false, error: err.message };
-  }
+  log('No "Download full-sized image" buttons found — response may be text-only');
+  return 0;
 }
 
 function log(msg) { console.log(`[GeminiImgGen] ${msg}`); }
@@ -219,14 +212,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.action === 'processPrompt') {
     processPrompt(msg.prompt)
       .then(result => reply(result))
-      .catch(err => { log(`Error: ${err.message}`); reply({ images: [], error: err.message }); });
-    return true;
-  }
-
-  if (msg.action === 'downloadImage') {
-    downloadImageInPage(msg.url, msg.filename)
-      .then(result => reply(result))
-      .catch(err => reply({ ok: false, error: err.message }));
+      .catch(err => { log(`Error: ${err.message}`); reply({ downloadCount: 0, error: err.message }); });
     return true;
   }
 });

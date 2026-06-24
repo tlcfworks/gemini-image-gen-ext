@@ -72,7 +72,7 @@ function onProgress(data) {
       break;
 
     case 'downloaded':
-      addLog(`  ✓ Saved: ${data.filename}`, 'success');
+      addLog(`  ✓ ${data.count ? data.count + ' full-size image(s) downloaded' : data.filename}`, 'success');
       break;
 
     case 'noImages':
