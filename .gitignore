@@ -11,3 +11,8 @@ Thumbs.db
 *.crx
 *.pem
 *.zip
+
+# Captured network traces — contain live session cookies, never commit
+docs/AsHAR.txt
+docs/AsFetch.txt
+*.har

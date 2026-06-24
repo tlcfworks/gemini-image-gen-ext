@@ -29,7 +29,7 @@ startBtn.addEventListener('click', async () => {
     .split('\n')
     .map(p => p.trim())
     .filter(Boolean)
-    .map(p => prefixCheck.checked ? `Generate an image of: ${p}` : p);
+    .map(p => prefixCheck.checked ? `Draw a picture of ${p}` : p);
 
   const options = {
     delayMs: Math.max(1, parseInt(delayInput.value, 10) || 4) * 1000,
