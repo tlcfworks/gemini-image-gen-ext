@@ -34,8 +34,9 @@ async function runGeneration(prompts, options) {
       await navigateAndWait(tabId, 'https://gemini.google.com/app');
       await sleep(2500); // let Angular finish bootstrapping
 
-      // Ask content script to type, submit, and wait for images
-      const result = await callContentScript(tabId, { action: 'processPrompt', prompt }, 180_000);
+      // Ask content script to type, submit, and wait for images.
+      // Image generation on Gemini takes ~90-120s; allow 6 min hard cap.
+      const result = await callContentScript(tabId, { action: 'processPrompt', prompt }, 360_000);
 
       if (result.error) {
         broadcast({ status: 'error', error: result.error });
@@ -54,22 +55,20 @@ async function runGeneration(prompts, options) {
         if (cancelled) break;
         const url = images[j];
         const slug = slugify(prompt).slice(0, 40);
-        const ext = extFromUrl(url);
-        const filename = `gemini-images/${slug}-${i + 1}-${j + 1}.${ext}`;
+        const filename = `gemini-images/${slug}-${i + 1}-${j + 1}.png`;
 
-        // Try chrome.downloads first (handles most http URLs fine with user cookies)
-        const dlOk = await tryDownload(url, filename);
-
-        if (!dlOk) {
-          // Fall back: ask content script to fetch+download within the page context
-          const fallback = await callContentScript(tabId, { action: 'downloadImage', url, filename }, 30_000);
-          if (fallback?.ok) {
-            broadcast({ status: 'downloaded', filename });
-          } else {
-            broadcast({ status: 'error', error: `Could not download image: ${fallback?.error || 'unknown'}` });
-          }
-        } else {
+        // Gemini images are blob:https://gemini.google.com/... URLs.
+        // Blob URLs are renderer-local; the background cannot download them directly.
+        // Delegate to the content script which shares the renderer with the page.
+        const dlResult = await callContentScript(
+          tabId,
+          { action: 'downloadImage', url, filename },
+          30_000,
+        );
+        if (dlResult?.ok) {
           broadcast({ status: 'downloaded', filename });
+        } else {
+          broadcast({ status: 'error', error: `Download failed: ${dlResult?.error || 'unknown'}` });
         }
       }
     } catch (err) {

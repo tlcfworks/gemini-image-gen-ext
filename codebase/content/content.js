@@ -1,55 +1,52 @@
 'use strict';
 
-// ─── SELECTORS ───────────────────────────────────────────────────────────────
-// All Gemini DOM selectors live here. Update this block when Google changes the UI.
-// Each entry is an array of candidates tried in order; the first match wins.
-// See docs/selector-guide.md for how to find updated selectors.
+// ─── SELECTORS (all confirmed against live gemini.google.com DOM) ─────────────
+// Update this block when Google changes the UI. See docs/selector-guide.md.
+// Each value is an array; the first matching candidate wins.
 const SEL = {
-  // The main text input (contenteditable div inside Quill / rich-textarea)
+  // Quill contenteditable div; aria-label confirmed live
   input: [
+    'div.ql-editor[aria-label="Enter a prompt for Gemini"]',
+    'rich-textarea div.ql-editor',
+    'div.ql-editor.textarea',
     'div.ql-editor[contenteditable="true"]',
-    'rich-textarea .ql-editor',
-    'div[contenteditable="true"][data-placeholder]',
-    '.input-area-container div[contenteditable="true"]',
-    'div[contenteditable="true"]',                         // last resort
+    'div[contenteditable="true"][aria-label]',
   ],
 
-  // Submit / send button
+  // Appears inside input-area-v2 only after text has been typed
   submit: [
     'button[aria-label="Send message"]',
-    'button[data-test-id="send-button"]',
-    'button.send-button',
-    'button[aria-label="Submit"]',
-    'button[aria-label="Run"]',
-    '.trailing-actions button[type="submit"]',
-    '.submit-button',
+    'input-area-v2 button[aria-label*="end"]',
+    'fieldset.input-area-container button[aria-label*="end"]',
   ],
 
-  // "Stop generating" button — present while Gemini is streaming a response
+  // Present while Gemini is streaming a response; "Stop response" confirmed live
   stop: [
+    'button[aria-label="Stop response"]',
     'button[aria-label="Stop generating"]',
-    'button[data-test-id="stop-button"]',
-    '.stop-button',
     'button[aria-label="Stop"]',
   ],
 
-  // Container for a single model response turn
+  // Wraps each model turn; "response-container" confirmed live as custom element
   response: [
-    'model-response',
-    '.model-response',
-    'message-content.model-response',
-    '[data-test-id="response"]',
+    'response-container',
     '.response-container',
-    'chat-message:last-of-type',
+    'model-response',
   ],
 
-  // "New chat" / reset conversation button
-  newChat: [
-    'a[aria-label="New chat"]',
-    'button[aria-label="New chat"]',
-    '[data-test-id="new-chat-button"]',
-    '.new-chat-button',
-    'a[href="/app"]',
+  // <generated-image> custom element contains the img; ".loaded" added when ready
+  generatedImage: [
+    'generated-image img.image.loaded',
+    'generated-image img.loaded',
+    'generated-image img',
+    'img[alt*="AI generated"]',
+    '.image-container img[alt*="generated"]',
+  ],
+
+  // Gemini's own download button inside generated-image (confirmed live)
+  geminiDownloadBtn: [
+    'button[aria-label="Download full-sized image"]',
+    'generated-image button[aria-label*="ownload"]',
   ],
 };
 
@@ -57,102 +54,105 @@ const SEL = {
 
 function find(candidates, root = document) {
   for (const sel of candidates) {
-    try {
-      const el = root.querySelector(sel);
-      if (el) return el;
-    } catch (_) {}
+    try { const el = root.querySelector(sel); if (el) return el; } catch (_) {}
   }
   return null;
 }
 
 function findAll(candidates, root = document) {
   for (const sel of candidates) {
-    try {
-      const els = root.querySelectorAll(sel);
-      if (els.length) return Array.from(els);
-    } catch (_) {}
+    try { const els = root.querySelectorAll(sel); if (els.length) return Array.from(els); } catch (_) {}
   }
   return [];
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function waitFor(candidates, timeoutMs = 20000) {
+async function waitFor(candidates, timeoutMs = 20000, pollMs = 300) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const el = find(candidates);
     if (el) return el;
-    await sleep(250);
+    await sleep(pollMs);
   }
-  throw new Error(`Timed out waiting for element. Tried: ${candidates[0]}`);
+  throw new Error(`Selector not found after ${timeoutMs}ms: ${candidates[0]}`);
 }
 
-// Simulate real user typing into a contenteditable element.
-// Angular/LitElement track native DOM events, so we can't just set .textContent.
-function typeText(field, text) {
+// ─── TEXT INPUT ───────────────────────────────────────────────────────────────
+// Gemini uses Quill + Angular. We must use execCommand so Angular detects the change.
+function typeIntoQuill(field, text) {
   field.focus();
 
-  // Clear existing text
+  // Clear existing content
   document.execCommand('selectAll', false, null);
   document.execCommand('delete', false, null);
 
-  // Insert new text via execCommand (works with Quill / contenteditable)
-  const inserted = document.execCommand('insertText', false, text);
+  // Position caret
+  const p = field.querySelector('p') || field;
+  const range = document.createRange();
+  range.setStart(p, 0);
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 
-  // Fallback if execCommand didn't work
-  if (!inserted || !field.textContent.trim()) {
-    field.textContent = text;
-    field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-  }
+  // Insert text — triggers Quill's internal change detection
+  document.execCommand('insertText', false, text);
+
+  // Fire an InputEvent as belt-and-suspenders for Angular zone detection
+  field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
 }
 
-// ─── CORE LOGIC ──────────────────────────────────────────────────────────────
+// ─── CORE: PROCESS ONE PROMPT ────────────────────────────────────────────────
 
 async function processPrompt(prompt) {
-  log(`Looking for input field…`);
+  log('Waiting for input field…');
   const inputField = await waitFor(SEL.input, 20000);
 
-  // Snapshot how many model responses exist before we submit
+  // Baseline response count before we submit
   const beforeCount = findAll(SEL.response).length;
 
-  log(`Typing prompt…`);
-  typeText(inputField, prompt);
-  await sleep(600);
+  log('Typing prompt…');
+  typeIntoQuill(inputField, prompt);
+  await sleep(600); // let Quill / Angular settle
 
-  log(`Submitting…`);
-  await submit(inputField);
+  log('Submitting…');
+  await clickSubmit(inputField);
 
-  log(`Waiting for response…`);
-  const images = await waitForImages(beforeCount, 150_000);
+  log('Waiting for image generation to complete…');
+  await waitForComplete(beforeCount, 300_000); // 5-minute hard cap
 
+  log('Extracting image URLs…');
+  const images = await extractImages(300_000);
   log(`Found ${images.length} image(s)`);
+
   return { images };
 }
 
-async function submit(inputField) {
-  const btn = find(SEL.submit);
-  if (btn && !btn.disabled) {
-    btn.click();
-    return;
-  }
-  // Fallback: send Enter key
-  inputField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-  inputField.dispatchEvent(new KeyboardEvent('keyup',  { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-}
-
-async function waitForImages(beforeCount, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-
-  // Phase 1 — wait for a new response container to appear
-  while (Date.now() < deadline) {
-    if (findAll(SEL.response).length > beforeCount) break;
+async function clickSubmit(inputField) {
+  // The send button only renders after text is in the input — poll briefly
+  for (let i = 0; i < 10; i++) {
+    const btn = find(SEL.submit);
+    if (btn && !btn.disabled) { btn.click(); return; }
     await sleep(300);
   }
+  // Fallback: Enter key
+  log('Send button not found — falling back to Enter key');
+  const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
+  inputField.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+  inputField.dispatchEvent(new KeyboardEvent('keyup',  enterOpts));
+}
 
-  // Phase 2 — wait for the stop button to appear then vanish
-  //   (appears when streaming starts, disappears when done)
+async function waitForComplete(beforeCount, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+
+  // Phase 1: wait for a new response-container to appear (usually < 5s)
+  while (Date.now() < deadline) {
+    if (findAll(SEL.response).length > beforeCount) break;
+    await sleep(400);
+  }
+
+  // Phase 2: wait for the stop button to appear, then disappear
   let seenStop = false;
   while (Date.now() < deadline) {
     const stopBtn = find(SEL.stop);
@@ -160,67 +160,53 @@ async function waitForImages(beforeCount, timeoutMs) {
       seenStop = true;
     } else if (seenStop) {
       await sleep(800); // small buffer after streaming ends
-      break;
-    } else if (Date.now() > deadline - (timeoutMs - 15_000)) {
-      // If stop button never appeared after 15s, assume already done
-      break;
+      return;
+    } else if (Date.now() > deadline - (timeoutMs - 20_000)) {
+      // Stop button never appeared after 20s — assume already done
+      return;
     }
     await sleep(400);
   }
-
-  return extractImages();
 }
 
-function extractImages() {
-  const responses = findAll(SEL.response);
-  const searchRoot = responses.length ? responses[responses.length - 1] : document;
-
-  const imgs = Array.from(searchRoot.querySelectorAll('img'));
-  const urls = imgs
-    .map(img => img.src)
-    .filter(src => src && src.startsWith('http') && isGeneratedImage(src));
-
-  if (urls.length) return urls;
-
-  // Broader fallback — look for Google-hosted images anywhere on the page
-  return Array.from(document.querySelectorAll('img'))
-    .map(img => img.src)
-    .filter(src => src && isGeneratedImage(src) && isGoogleImageHost(src));
+// Wait for images with the "loaded" class (Gemini adds it when blob is ready)
+async function extractImages(timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const imgs = findAll(SEL.generatedImage);
+    if (imgs.length > 0) return imgs.map(img => img.src).filter(Boolean);
+    await sleep(500);
+  }
+  log('No images found within timeout');
+  return [];
 }
 
-function isGeneratedImage(src) {
-  const lower = src.toLowerCase();
-  const SKIP = ['favicon', '/icon', 'logo', 'avatar', 'profile', '.svg', 'gstatic.com/images', 'accounts.google'];
-  return !SKIP.some(s => lower.includes(s));
-}
-
-function isGoogleImageHost(src) {
-  return src.includes('googleusercontent.com') || src.includes('generativelanguage.googleapis.com');
-}
-
-// ─── IMAGE DOWNLOAD (from content script context, preserves auth cookies) ───
-
-async function downloadImageInPage(url, filename) {
+// ─── IMAGE DOWNLOAD ───────────────────────────────────────────────────────────
+// Gemini images are served as blob:https://gemini.google.com/... URLs.
+// Content scripts share the renderer with the page, so we can fetch them directly.
+async function downloadImageInPage(blobUrl, filename) {
   try {
-    const resp = await fetch(url, { credentials: 'include' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const resp = await fetch(blobUrl); // works because we're in the gemini.google.com origin
+    if (!resp.ok) throw new Error(`fetch ${resp.status}`);
     const blob = await resp.blob();
-    const blobUrl = URL.createObjectURL(blob);
+    const localUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = blobUrl;
+    a.href = localUrl;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl); }, 500);
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(localUrl); }, 500);
     return { ok: true };
   } catch (err) {
+    log(`Blob download failed (${err.message}), trying Gemini's own download button`);
+    // Fallback: click Gemini's own "Download full-sized image" button
+    const dlBtn = find(SEL.geminiDownloadBtn);
+    if (dlBtn) { dlBtn.click(); return { ok: true, usedGeminiBtn: true }; }
     return { ok: false, error: err.message };
   }
 }
 
-function log(msg) {
-  console.log(`[GeminiImgGen] ${msg}`);
-}
+function log(msg) { console.log(`[GeminiImgGen] ${msg}`); }
 
 // ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
 
@@ -234,7 +220,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     processPrompt(msg.prompt)
       .then(result => reply(result))
       .catch(err => { log(`Error: ${err.message}`); reply({ images: [], error: err.message }); });
-    return true; // keep channel open for async reply
+    return true;
   }
 
   if (msg.action === 'downloadImage') {

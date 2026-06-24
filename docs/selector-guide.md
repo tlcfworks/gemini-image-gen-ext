@@ -1,88 +1,76 @@
 # Gemini DOM Selector Guide
 
-When Google updates the Gemini UI, selectors in `codebase/content/content.js` (the `SEL` object at the top) may break. This doc explains how to find updated selectors.
+All selectors in `codebase/content/content.js` (`SEL` object at top of file) were confirmed against a live, logged-in `gemini.google.com/app` session on 2026-06-24. When Google updates the UI, update `SEL` — the script is designed so the `SEL` block is the only thing that needs to change.
+
+---
+
+## Confirmed Live Selectors (2026-06-24)
+
+| Purpose | Selector | Notes |
+|---|---|---|
+| Text input | `div.ql-editor[aria-label="Enter a prompt for Gemini"]` | Inside `rich-textarea` custom element; Quill editor |
+| Submit button | `button[aria-label="Send message"]` | Only appears in DOM **after text has been typed** |
+| Stop button | `button[aria-label="Stop response"]` | Present while Gemini streams; disappears when done |
+| Response wrapper | `response-container` | Custom Angular element wrapping each model turn |
+| Generated image | `generated-image img.image.loaded` | `.loaded` class added when blob is fully decoded |
+| Gemini download btn | `button[aria-label="Download full-sized image"]` | Inside `generated-image`; used as fallback |
+
+**Image URLs are always blob URLs**: `blob:https://gemini.google.com/<uuid>`. They cannot be downloaded by the extension background directly — the content script fetches them (it runs in the same renderer process as the page).
+
+**Image generation takes ~90-120 seconds.** The 5-minute timeout in the content script is intentional.
+
+---
 
 ## How to Inspect the Live DOM
 
 1. Open `https://gemini.google.com/app` and sign in
-2. Press **F12** → open DevTools
-3. Use the **Elements panel** or run snippets in the **Console**
+2. Press **F12** → DevTools → Console
 
-## Finding the Input Field
-
-The text input is typically a Quill `contenteditable` div inside a custom web component:
-
+### Find the input field
 ```js
-// Run in Console to find candidate selectors:
-document.querySelectorAll('[contenteditable="true"]')
-document.querySelectorAll('div.ql-editor')
+document.querySelectorAll('[contenteditable]')
 document.querySelector('rich-textarea')
+document.querySelector('div.ql-editor')
 ```
 
-Expected structure (may vary):
-```html
-<rich-textarea>
-  <div class="ql-editor" contenteditable="true" data-placeholder="Enter a prompt here">
-    <p><br></p>
-  </div>
-</rich-textarea>
-```
-
-## Finding the Submit Button
-
+### Find the submit button (type first so it renders)
 ```js
+// Type something, then:
 document.querySelectorAll('button[aria-label]')
-// Look for one with label like "Send message", "Submit", "Run"
-
-// Or inspect near the input area:
-document.querySelector('.input-area-container').querySelectorAll('button')
+// Look for one with aria-label containing "Send" or "Submit"
 ```
 
-## Finding Response Containers
-
-After a prompt is submitted, model responses appear in custom elements:
-
+### Find the stop button (while generating)
 ```js
-document.querySelectorAll('model-response')
-document.querySelectorAll('[data-test-id="response"]')
-document.querySelectorAll('message-content')
+document.querySelector('button[aria-label="Stop response"]')
 ```
 
-## Finding the Stop Button
-
-While Gemini is generating, a stop button appears:
-
+### Find response containers
 ```js
-document.querySelector('button[aria-label="Stop generating"]')
+document.querySelectorAll('response-container')
 ```
 
-## Finding Generated Images
-
-After a generation completes, look for `<img>` tags in the last response:
-
+### Find generated images (after generation completes)
 ```js
-const responses = document.querySelectorAll('model-response')
-const last = responses[responses.length - 1]
-last.querySelectorAll('img')
+document.querySelectorAll('generated-image img')
+// or:
+document.querySelectorAll('img[alt*="AI generated"]')
 ```
 
-Image src URLs typically look like:
-- `https://generativelanguage.googleapis.com/...`
-- `https://lh3.googleusercontent.com/...`
+---
 
 ## Updating Selectors
 
-Edit the `SEL` constant at the top of `codebase/content/content.js`. Add new working selectors at the **front** of each array (highest priority):
+Add the new working selector at the **front** of the relevant array in `SEL` (highest priority). Do not remove old entries — they may work again in future Gemini versions.
 
 ```js
 const SEL = {
   input: [
-    'div.new-working-selector',   // ← add here
-    'div.ql-editor[contenteditable="true"]',
-    // ...existing fallbacks...
+    'div.new-working-selector',   // ← add new one first
+    'div.ql-editor[aria-label="Enter a prompt for Gemini"]',  // previous
+    // ...
   ],
-  // ...
 };
 ```
 
-Do not remove old selectors — they may work again in future Gemini versions.
+After updating, reload the extension at `chrome://extensions` and test.
